@@ -1,6 +1,6 @@
 # release-binaries.yml — Cross-platform binary release workflow
 #
-# Builds the `ov` CLI binary for all supported platforms:
+# Builds the following artifacts for all supported platforms:
 #   - linux/amd64 (x86_64-unknown-linux-musl)
 #   - linux/arm64 (aarch64-unknown-linux-musl)
 #   - macos/amd64 (x86_64-apple-darwin)
@@ -8,12 +8,16 @@
 #   - windows/amd64 (x86_64-pc-windows-msvc)
 #   - windows/arm64 (aarch64-pc-windows-msvc)
 #
+# Artifacts per platform:
+#   1. ov CLI binary (ov / ov.exe)
+#   2. ragfs-ffi staticlib (libragfs_ffi.a / ragfs_ffi.lib) + C header
+#      — embeddable into Go via cgo (see crates/ragfs-ffi/README.md)
+#
 # Artifacts are attached to GitHub Releases on tag push (v* or cli@*).
 # Also supports manual workflow_dispatch for ad-hoc builds.
 #
-# The `ov` binary is the OpenViking CLI tool used by devine_cli and other
-# integrations. Linux builds use musl for fully static binaries that run
-# on any glibc distribution.
+# Linux builds use musl for fully static binaries that run on any glibc
+# distribution (CentOS 7/8, RHEL 8/9, Alpine, etc.).
 
 name: Release Binaries
 
@@ -50,33 +54,45 @@ jobs:
             os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             ov_binary: ov
+            ffi_lib: libragfs_ffi.a
+            archive_ext: tar.gz
 
           - name: linux-arm64
             os: ubuntu-24.04
             target: aarch64-unknown-linux-musl
             ov_binary: ov
+            ffi_lib: libragfs_ffi.a
+            archive_ext: tar.gz
 
           # macOS
           - name: macos-amd64
             os: macos-15-intel
             target: x86_64-apple-darwin
             ov_binary: ov
+            ffi_lib: libragfs_ffi.a
+            archive_ext: tar.gz
 
           - name: macos-arm64
             os: macos-14
             target: aarch64-apple-darwin
             ov_binary: ov
+            ffi_lib: libragfs_ffi.a
+            archive_ext: tar.gz
 
           # Windows
           - name: windows-amd64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             ov_binary: ov.exe
+            ffi_lib: ragfs_ffi.lib
+            archive_ext: zip
 
           - name: windows-arm64
             os: windows-latest
             target: aarch64-pc-windows-msvc
             ov_binary: ov.exe
+            ffi_lib: ragfs_ffi.lib
+            archive_ext: zip
 
     steps:
       - uses: actions/checkout@v6
@@ -138,6 +154,16 @@ jobs:
             cargo build --release --target ${{ matrix.target }} -p ov_cli
           fi
 
+      # ── Build ragfs-ffi staticlib (for Go cgo embedding) ──
+      - name: Build ragfs-ffi staticlib
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            cargo zigbuild --release --target ${{ matrix.target }} -p ragfs-ffi
+          else
+            cargo build --release --target ${{ matrix.target }} -p ragfs-ffi
+          fi
+
       # ── Package artifacts ──
       - name: Package release archive
         id: package
@@ -145,7 +171,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           STAGING="release-${{ matrix.name }}"
-          mkdir -p "$STAGING"
+          mkdir -p "$STAGING/lib" "$STAGING/include"
 
           # Copy ov CLI binary
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
@@ -155,20 +181,22 @@ jobs:
             chmod +x "$STAGING/${{ matrix.ov_binary }}"
           fi
 
+          # Copy ragfs-ffi staticlib
+          cp "target/${{ matrix.target }}/release/${{ matrix.ffi_lib }}" "$STAGING/lib/"
+
+          # Copy C header
+          cp "crates/ragfs-ffi/include/ragfs_ffi.h" "$STAGING/include/"
+
           # Copy README and LICENSE
-          if [[ -f "README.md" ]]; then
-            cp "README.md" "$STAGING/"
-          fi
-          if [[ -f "LICENSE" ]]; then
-            cp "LICENSE" "$STAGING/"
-          fi
+          for f in README.md LICENSE; do
+            [[ -f "$f" ]] && cp "$f" "$STAGING/"
+          done
 
           # Create archive
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            ARCHIVE="openviking-${VERSION}-${{ matrix.name }}.zip"
+          ARCHIVE="openviking-${VERSION}-${{ matrix.name }}.${{ matrix.archive_ext }}"
+          if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
             cd "$STAGING" && 7z a "../$ARCHIVE" . && cd ..
           else
-            ARCHIVE="openviking-${VERSION}-${{ matrix.name }}.tar.gz"
             tar -czf "$ARCHIVE" -C "$STAGING" .
           fi
 

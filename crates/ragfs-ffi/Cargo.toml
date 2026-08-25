@@ -1,0 +1,22 @@
+[package]
+name = "ragfs-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "C FFI shim over ragfs (LocalFileSystem) for embedding ragfs into C/Go via cgo"
+license = "Apache-2.0"
+rust-version = "1.91.1"
+
+[lib]
+name = "ragfs_ffi"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+ragfs = { path = "../ragfs" }
+tokio = { version = "1.38", features = ["full"] }
+serde_json = "1.0"
+libc = "0.2"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

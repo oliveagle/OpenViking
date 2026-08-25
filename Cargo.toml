@@ -4,6 +4,7 @@ members = [
     "crates/ragfs",
     "crates/ragfs-cache-redis",
     "crates/ragfs-python",
+    "crates/ragfs-ffi",
 ]
 exclude = [
     "crates/ragfs-cache-mooncake",

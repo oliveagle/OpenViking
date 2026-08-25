@@ -4016,6 +4016,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ragfs-ffi"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "ragfs",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ragfs-python"
 version = "0.1.0"
 dependencies = [
