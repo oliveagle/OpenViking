@@ -9,10 +9,11 @@
 #
 # Note: Windows is amd64-only (no arm64 builds).
 #
-# Artifacts per platform:
-#   1. ov CLI binary (ov / ov.exe)
-#   2. ragfs-ffi staticlib (libragfs_ffi.a / ragfs_ffi.lib) + C header
-#      — embeddable into Go via cgo (see crates/ragfs-ffi/README.md)
+# Artifacts per platform (two archives):
+#   1. -cli  : ov CLI binary (ov / ov.exe)
+#   2. -lib  : ragfs-ffi staticlib (lib/libragfs_ffi.a / lib/ragfs_ffi.lib)
+#              + C header (include/ragfs_ffi.h) — embeddable into Go via
+#              cgo (see docs/embedding-go.md)
 #
 # Artifacts are attached to GitHub Releases on tag push (v* or cli@*).
 # Also supports manual workflow_dispatch for ad-hoc builds.
@@ -158,54 +159,57 @@ jobs:
             cargo build --release --target ${{ matrix.target }} -p ragfs-ffi
           fi
 
-      # ── Package artifacts ──
-      - name: Package release archive
+      # ── Package artifacts (CLI and lib ship as separate archives) ──
+      - name: Package release archives
         id: package
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          STAGING="release-${{ matrix.name }}"
-          mkdir -p "$STAGING/lib" "$STAGING/include"
+          BASE="openviking-${VERSION}-${{ matrix.name }}"
+          EXT="${{ matrix.archive_ext }}"
 
-          # Copy ov CLI binary
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            cp "target/${{ matrix.target }}/release/${{ matrix.ov_binary }}" "$STAGING/"
-          else
-            cp "target/${{ matrix.target }}/release/${{ matrix.ov_binary }}" "$STAGING/"
-            chmod +x "$STAGING/${{ matrix.ov_binary }}"
-          fi
+          # make_archive <staging-dir> <archive-name>: zip via 7z, else tar.gz.
+          # Absolute target path so the 7z subshell (which cd's into staging)
+          # still writes next to the repo root.
+          make_archive() {
+            local dir="$1" name="$2" abs="$PWD/$name"
+            if [[ "$EXT" == "zip" ]]; then
+              (cd "$dir" && 7z a -bso0 "$abs" . >/dev/null)
+            else
+              tar -czf "$abs" -C "$dir" .
+            fi
+          }
 
-          # Copy ragfs-ffi staticlib. rustc emits `libragfs_ffi.a` (ar
-          # archive) on unix targets and `ragfs_ffi.lib` (COFF archive) on
-          # the msvc target — the matrix ffi_lib value matches the on-disk
-          # name, so it is copied as-is.
-          cp "target/${{ matrix.target }}/release/${{ matrix.ffi_lib }}" "$STAGING/lib/"
+          # --- CLI archive: openviking-<ver>-<plat>-cli.{tar.gz,zip} ---
+          STG_CLI="release-${{ matrix.name }}-cli"
+          mkdir -p "$STG_CLI"
+          cp "target/${{ matrix.target }}/release/${{ matrix.ov_binary }}" "$STG_CLI/"
+          [[ "$EXT" != "zip" ]] && chmod +x "$STG_CLI/${{ matrix.ov_binary }}"
+          for f in README.md LICENSE; do [[ -f "$f" ]] && cp "$f" "$STG_CLI/"; done
+          make_archive "$STG_CLI" "$BASE-cli.$EXT"
 
-          # Copy C header
-          cp "crates/ragfs-ffi/include/ragfs_ffi.h" "$STAGING/include/"
+          # --- LIB archive: openviking-<ver>-<plat>-lib.{tar.gz,zip} ---
+          # ragfs-ffi staticlib (Go/cgo embedding) + C header. rustc emits
+          # libragfs_ffi.a (ar) on unix and ragfs_ffi.lib (COFF) on msvc;
+          # the matrix ffi_lib value matches the on-disk name.
+          STG_LIB="release-${{ matrix.name }}-lib"
+          mkdir -p "$STG_LIB/lib" "$STG_LIB/include"
+          cp "target/${{ matrix.target }}/release/${{ matrix.ffi_lib }}" "$STG_LIB/lib/"
+          cp "crates/ragfs-ffi/include/ragfs_ffi.h" "$STG_LIB/include/"
+          for f in README.md LICENSE; do [[ -f "$f" ]] && cp "$f" "$STG_LIB/"; done
+          make_archive "$STG_LIB" "$BASE-lib.$EXT"
 
-          # Copy README and LICENSE
-          for f in README.md LICENSE; do
-            [[ -f "$f" ]] && cp "$f" "$STAGING/"
-          done
-
-          # Create archive
-          ARCHIVE="openviking-${VERSION}-${{ matrix.name }}.${{ matrix.archive_ext }}"
-          if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
-            cd "$STAGING" && 7z a "../$ARCHIVE" . && cd ..
-          else
-            tar -czf "$ARCHIVE" -C "$STAGING" .
-          fi
-
-          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
-          echo "Archive: $ARCHIVE"
-          ls -lh "$ARCHIVE"
+          echo "archive_cli=$BASE-cli.$EXT" >> "$GITHUB_OUTPUT"
+          echo "archive_lib=$BASE-lib.$EXT" >> "$GITHUB_OUTPUT"
+          ls -lh "$BASE-cli.$EXT" "$BASE-lib.$EXT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
-          path: ${{ steps.package.outputs.archive }}
+          path: |
+            openviking-${{ steps.version.outputs.version }}-${{ matrix.name }}-cli.*
+            openviking-${{ steps.version.outputs.version }}-${{ matrix.name }}-lib.*
 
   # ─── Create GitHub Release ───────────────────────────────────────────────────
   release:
@@ -224,6 +228,16 @@ jobs:
 
       - name: Display artifact structure
         run: ls -R artifacts/
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          for f in */*; do
+            [ -f "$f" ] || continue
+            h="$(sha256sum "$f" | awk '{print $1}')"
+            echo "$h  $(basename "$f")"
+          done | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Resolve version and tag
         id: tag

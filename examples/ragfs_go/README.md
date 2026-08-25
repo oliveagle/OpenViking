@@ -62,15 +62,16 @@ prefix**: `viking_fs_open`, `viking_fs_get`, `viking_fs_put`,
 
 ## Release artifacts
 
-Prebuilt staticlibs ship in the cross-platform release archives
-(`openviking-<version>-<platform>.{tar.gz,zip}`) produced by
-`.github/workflows/release-binaries.yml`:
+Prebuilt staticlibs ship in the per-platform `-lib` release archives
+(`openviking-<version>-<platform>-lib.{tar.gz,zip}`) produced by
+`.github/workflows/release-binaries.yml` (the `-cli` archives contain only
+the ov binary):
 
 ```
-ov                    # CLI
 lib/libragfs_ffi.a    # staticlib (ragfs_ffi.lib on Windows)
 include/ragfs_ffi.h   # C header
 ```
 
 Point `#cgo LDFLAGS: -L<extracted>/lib -lragfs_ffi` and
-`#cgo CFLAGS: -I<extracted>/include` at the archive for your target platform.
+`#cgo CFLAGS: -I<extracted>/include` at the `-lib` archive for your target
+platform.

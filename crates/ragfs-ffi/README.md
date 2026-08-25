@@ -10,15 +10,17 @@ directly — no Python wheel required.
 
 ## What is released
 
-Each cross-platform release archive (`openviking-<version>-<platform>.{tar.gz,zip}`)
-contains:
+Each platform ships two release archives
+(`openviking-<version>-<platform>-{cli,lib}.{tar.gz,zip}`):
 
 ```
-ov                      # the OpenViking CLI binary (or ov.exe on Windows)
-lib/libragfs_ffi.a      # the staticlib (or ragfs_ffi.lib on Windows)
-include/ragfs_ffi.h     # the C header (cbindgen-generated, hand-maintained here)
-README.md / LICENSE
+-cli:  ov                       # the OpenViking CLI binary (or ov.exe on Windows)
+-lib:  lib/libragfs_ffi.a       # the staticlib (or lib/ragfs_ffi.lib on Windows)
+       include/ragfs_ffi.h      # the C header (cbindgen-generated, hand-maintained here)
+       README.md / LICENSE
 ```
+
+Go/cgo embedding only needs the `-lib` archive.
 
 ## Building locally
 

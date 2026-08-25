@@ -34,17 +34,23 @@ OpenViking naming, matching `devine_cli`'s `vikingfs_*` convention).
 
 ### A. From a release archive (recommended)
 
-Each cross-platform archive from `.github/workflows/release-binaries.yml`
-(`openviking-<version>-<platform>.{tar.gz,zip}`) contains:
+Each platform ships two archives from `.github/workflows/release-binaries.yml`:
 
 ```
-ov                    # CLI (optional)
+openviking-<version>-<platform>-cli.{tar.gz,zip}   # the ov CLI binary
+openviking-<version>-<platform>-lib.{tar.gz,zip}   # the staticlib + header
+```
+
+The `-lib` archive contains:
+
+```
 lib/libragfs_ffi.a    # ragfs_ffi.lib on Windows
 include/ragfs_ffi.h
 ```
 
-Extract the archive matching your **build machine** (the Go binary's target
-arch/OS must match the staticlib's), then in your `.go` file:
+Embedding into Go only needs the `-lib` archive. Extract the one matching
+your **build machine** (the Go binary's target arch/OS must match the
+staticlib's), then in your `.go` file:
 
 ```go
 //go:build cgo
