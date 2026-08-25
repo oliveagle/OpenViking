@@ -6,7 +6,8 @@
 #   - macos/amd64 (x86_64-apple-darwin)
 #   - macos/arm64 (aarch64-apple-darwin)
 #   - windows/amd64 (x86_64-pc-windows-msvc)
-#   - windows/arm64 (aarch64-pc-windows-msvc)
+#
+# Note: Windows is amd64-only (no arm64 builds).
 #
 # Artifacts per platform:
 #   1. ov CLI binary (ov / ov.exe)
@@ -79,17 +80,10 @@ jobs:
             ffi_lib: libragfs_ffi.a
             archive_ext: tar.gz
 
-          # Windows
+          # Windows (amd64 only)
           - name: windows-amd64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            ov_binary: ov.exe
-            ffi_lib: ragfs_ffi.lib
-            archive_ext: zip
-
-          - name: windows-arm64
-            os: windows-latest
-            target: aarch64-pc-windows-msvc
             ov_binary: ov.exe
             ffi_lib: ragfs_ffi.lib
             archive_ext: zip
@@ -181,7 +175,10 @@ jobs:
             chmod +x "$STAGING/${{ matrix.ov_binary }}"
           fi
 
-          # Copy ragfs-ffi staticlib
+          # Copy ragfs-ffi staticlib. rustc emits `libragfs_ffi.a` (ar
+          # archive) on unix targets and `ragfs_ffi.lib` (COFF archive) on
+          # the msvc target — the matrix ffi_lib value matches the on-disk
+          # name, so it is copied as-is.
           cp "target/${{ matrix.target }}/release/${{ matrix.ffi_lib }}" "$STAGING/lib/"
 
           # Copy C header
