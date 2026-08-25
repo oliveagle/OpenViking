@@ -145,8 +145,10 @@ trap 'rm -rf "$STAGE_ROOT"' EXIT
 
 # make_archive <staging-dir> <archive-name>: zip via 7z, else tar.gz
 make_archive() {
-  local dir="$1" name="$2" abs="$REPO_ROOT/$OUT_DIR/$name"
-  if [ "$name" = "*.zip" ] || [[ "$name" == *.zip ]]; then
+  local dir="$1"
+  local name="$2"
+  local abs="$REPO_ROOT/$OUT_DIR/$name"
+  if [[ "$name" == *.zip ]]; then
     if command -v 7z >/dev/null 2>&1; then
       (cd "$dir" && 7z a -bso0 "$abs" . >/dev/null)
     else
@@ -234,14 +236,14 @@ verify_lib() { # <archive> <ext> <ffi>
 }
 # CLI archives: binary present
 for pl in macos-arm64 macos-amd64 linux-amd64 linux-arm64; do
-  verify_cli "$OUT_DIR/openviking-$VERSION-$pl.tar.gz" tar.gz ov
+  verify_cli "$OUT_DIR/openviking-$VERSION-$pl-cli.tar.gz" tar.gz ov
 done
-verify_cli "$OUT_DIR/openviking-$VERSION-windows-amd64.zip" zip ov.exe
+verify_cli "$OUT_DIR/openviking-$VERSION-windows-amd64-cli.zip" zip ov.exe
 # LIB archives: staticlib + symbols + header
 for pl in macos-arm64 macos-amd64 linux-amd64 linux-arm64; do
-  verify_lib "$OUT_DIR/openviking-$VERSION-$pl.tar.gz" tar.gz libragfs_ffi.a
+  verify_lib "$OUT_DIR/openviking-$VERSION-$pl-lib.tar.gz" tar.gz libragfs_ffi.a
 done
-verify_lib "$OUT_DIR/openviking-$VERSION-windows-amd64.zip" zip ragfs_ffi.lib
+verify_lib "$OUT_DIR/openviking-$VERSION-windows-amd64-lib.zip" zip ragfs_ffi.lib
 
 # Host smoke test: run the native binary if the host matches macos-arm64
 if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then

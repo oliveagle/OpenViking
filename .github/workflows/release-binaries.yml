@@ -172,7 +172,9 @@ jobs:
           # Absolute target path so the 7z subshell (which cd's into staging)
           # still writes next to the repo root.
           make_archive() {
-            local dir="$1" name="$2" abs="$PWD/$name"
+            local dir="$1"
+            local name="$2"
+            local abs="$PWD/$name"
             if [[ "$EXT" == "zip" ]]; then
               (cd "$dir" && 7z a -bso0 "$abs" . >/dev/null)
             else
