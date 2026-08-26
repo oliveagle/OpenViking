@@ -1,22 +1,32 @@
 # release-binaries.yml — Cross-platform binary release workflow
 #
-# Builds the following artifacts for all supported platforms:
+# The CLI and the lib ship on TWO independent tracks, each with its own
+# build job, artifacts, and release name:
+#
+#   - cli : ov CLI binary (ov / ov.exe)
+#   - lib : ragfs-ffi staticlib (lib/libragfs_ffi.a / lib/ragfs_ffi.lib)
+#           + C header (include/ragfs_ffi.h) — embeddable into Go via cgo
+#           (see docs/embedding-go.md)
+#
+# Supported platforms (both tracks):
 #   - linux/amd64 (x86_64-unknown-linux-musl)
 #   - linux/arm64 (aarch64-unknown-linux-musl)
 #   - macos/amd64 (x86_64-apple-darwin)
 #   - macos/arm64 (aarch64-apple-darwin)
-#   - windows/amd64 (x86_64-pc-windows-msvc)
+#   - windows/amd64 (x86_64-pc-windows-msvc)   (Windows is amd64-only)
 #
-# Note: Windows is amd64-only (no arm64 builds).
+# Trigger semantics:
+#   v*          → full release: build BOTH cli + lib, one "OpenViking <ver>" release
+#   cli@*       → CLI only:  "OpenViking CLI <ver>" release (cli archives)
+#   lib@*       → lib only:  "OpenViking Lib <ver>" release (lib archives)
+#                 Go embedders normally want this track
+#   workflow_dispatch → pick component = all | cli | lib via inputs
 #
-# Artifacts per platform (two archives):
-#   1. -cli  : ov CLI binary (ov / ov.exe)
-#   2. -lib  : ragfs-ffi staticlib (lib/libragfs_ffi.a / lib/ragfs_ffi.lib)
-#              + C header (include/ragfs_ffi.h) — embeddable into Go via
-#              cgo (see docs/embedding-go.md)
+# Per-platform archives (one per component per platform):
+#   openviking-<ver>-<plat>-cli.{tar.gz,zip}   the ov binary
+#   openviking-<ver>-<plat>-lib.{tar.gz,zip}   the staticlib + C header
 #
-# Artifacts are attached to GitHub Releases on tag push (v* or cli@*).
-# Also supports manual workflow_dispatch for ad-hoc builds.
+# Artifacts are attached to GitHub Releases on tag push.
 #
 # Linux builds use musl for fully static binaries that run on any glibc
 # distribution (CentOS 7/8, RHEL 8/9, Alpine, etc.).
@@ -28,8 +38,18 @@ on:
     tags:
       - 'v*'
       - 'cli@*'
+      - 'lib@*'
   workflow_dispatch:
     inputs:
+      component:
+        description: 'Which component to build: all (cli + lib), cli, or lib'
+        required: true
+        type: choice
+        options:
+          - all
+          - cli
+          - lib
+        default: all
       version:
         description: 'Version string (e.g. 0.1.0). Leave empty for dev build.'
         required: false
@@ -42,11 +62,79 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# Platform matrix shared by both component jobs (kept as separate copies
+# because a job cannot reference another job's matrix).
+# NOTE: if you add/remove a platform here, update it in BOTH build-cli
+# and build-lib.
+
 jobs:
-  # ─── Build matrix ────────────────────────────────────────────────────────────
-  build:
-    name: Build ${{ matrix.name }}
+  # ─── Resolve version + which components to build ───────────────────────────
+  resolve:
+    name: Resolve
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release_name: ${{ steps.name.outputs.name }}
+      build_cli: ${{ steps.flag.outputs.build_cli }}
+      build_lib: ${{ steps.flag.outputs.build_lib }}
+    steps:
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          elif [[ "${GITHUB_REF}" == refs/tags/cli@* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/cli@}"
+          elif [[ "${GITHUB_REF}" == refs/tags/lib@* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/lib@}"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Resolve components
+        id: flag
+        shell: bash
+        run: |
+          build_cli=1
+          build_lib=1
+          if [[ "${GITHUB_REF}" == refs/tags/cli@* ]]; then
+            build_lib=0
+          elif [[ "${GITHUB_REF}" == refs/tags/lib@* ]]; then
+            build_cli=0
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            case "${{ inputs.component }}" in
+              cli) build_lib=0 ;;
+              lib) build_cli=0 ;;
+            esac
+          fi
+          echo "build_cli=$build_cli" >> "$GITHUB_OUTPUT"
+          echo "build_lib=$build_lib" >> "$GITHUB_OUTPUT"
+          echo "Build cli=$build_cli lib=$build_lib"
+
+      - name: Resolve release name
+        id: name
+        shell: bash
+        run: |
+          NAME="OpenViking"
+          if [[ "${GITHUB_REF}" == refs/tags/cli@* ]]; then
+            NAME="OpenViking CLI"
+          elif [[ "${GITHUB_REF}" == refs/tags/lib@* ]]; then
+            NAME="OpenViking Lib"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Release: $NAME ${{ steps.version.outputs.version }}"
+
+  # ─── CLI build matrix (ov binary only) ──────────────────────────────────────
+  build-cli:
+    name: CLI ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    needs: resolve
+    if: needs.resolve.outputs.build_cli == '1'
     strategy:
       fail-fast: false
       matrix:
@@ -56,14 +144,12 @@ jobs:
             os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             ov_binary: ov
-            ffi_lib: libragfs_ffi.a
             archive_ext: tar.gz
 
           - name: linux-arm64
             os: ubuntu-24.04
             target: aarch64-unknown-linux-musl
             ov_binary: ov
-            ffi_lib: libragfs_ffi.a
             archive_ext: tar.gz
 
           # macOS
@@ -71,14 +157,12 @@ jobs:
             os: macos-15-intel
             target: x86_64-apple-darwin
             ov_binary: ov
-            ffi_lib: libragfs_ffi.a
             archive_ext: tar.gz
 
           - name: macos-arm64
             os: macos-14
             target: aarch64-apple-darwin
             ov_binary: ov
-            ffi_lib: libragfs_ffi.a
             archive_ext: tar.gz
 
           # Windows (amd64 only)
@@ -86,6 +170,131 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
             ov_binary: ov.exe
+            archive_ext: zip
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      # ── Zig + cargo-zigbuild for Linux musl cross-compilation ──
+      - name: Install Zig + cargo-zigbuild (Linux musl)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.13.0
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          mkdir -p "$ZIG_DIR"
+          curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/zig-linux-x86_64-$ZIG_VERSION.tar.xz" \
+            | tar -xJ --strip-components=1 -C "$ZIG_DIR"
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-cli-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-cli-${{ matrix.target }}-
+
+      # ── Build ov CLI binary ──
+      - name: Build ov CLI
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            cargo zigbuild --release --target ${{ matrix.target }} -p ov_cli
+          else
+            cargo build --release --target ${{ matrix.target }} -p ov_cli
+          fi
+
+      # ── Package CLI archive ──
+      - name: Package release archive
+        id: package
+        shell: bash
+        run: |
+          VERSION="${{ needs.resolve.outputs.version }}"
+          BASE="openviking-${VERSION}-${{ matrix.name }}"
+          EXT="${{ matrix.archive_ext }}"
+
+          # make_archive <staging-dir> <archive-name>: zip via 7z, else tar.gz.
+          # Absolute target path so the 7z subshell (which cd's into staging)
+          # still writes next to the repo root.
+          make_archive() {
+            local dir="$1"
+            local name="$2"
+            local abs="$PWD/$name"
+            if [[ "$EXT" == "zip" ]]; then
+              (cd "$dir" && 7z a -bso0 "$abs" . >/dev/null)
+            else
+              tar -czf "$abs" -C "$dir" .
+            fi
+          }
+
+          STG_CLI="release-${{ matrix.name }}-cli"
+          mkdir -p "$STG_CLI"
+          cp "target/${{ matrix.target }}/release/${{ matrix.ov_binary }}" "$STG_CLI/"
+          [[ "$EXT" != "zip" ]] && chmod +x "$STG_CLI/${{ matrix.ov_binary }}"
+          for f in README.md LICENSE; do [[ -f "$f" ]] && cp "$f" "$STG_CLI/"; done
+          make_archive "$STG_CLI" "$BASE-cli.$EXT"
+
+          echo "archive_cli=$BASE-cli.$EXT" >> "$GITHUB_OUTPUT"
+          ls -lh "$BASE-cli.$EXT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.name }}
+          path: openviking-${{ needs.resolve.outputs.version }}-${{ matrix.name }}-cli.*
+
+  # ─── Lib build matrix (ragfs-ffi staticlib for Go/cgo embedding) ───────────
+  build-lib:
+    name: Lib ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    needs: resolve
+    if: needs.resolve.outputs.build_lib == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux
+          - name: linux-amd64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            ffi_lib: libragfs_ffi.a
+            archive_ext: tar.gz
+
+          - name: linux-arm64
+            os: ubuntu-24.04
+            target: aarch64-unknown-linux-musl
+            ffi_lib: libragfs_ffi.a
+            archive_ext: tar.gz
+
+          # macOS
+          - name: macos-amd64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            ffi_lib: libragfs_ffi.a
+            archive_ext: tar.gz
+
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            ffi_lib: libragfs_ffi.a
+            archive_ext: tar.gz
+
+          # Windows (amd64 only)
+          - name: windows-amd64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
             ffi_lib: ragfs_ffi.lib
             archive_ext: zip
 
@@ -119,35 +328,9 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-lib-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.target }}-
-
-      - name: Resolve version
-        id: version
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          elif [[ "${GITHUB_REF}" == refs/tags/cli@* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/cli@}"
-          elif [[ -n "${{ inputs.version }}" ]]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="0.0.0-dev"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION"
-
-      # ── Build ov CLI binary ──
-      - name: Build ov CLI
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-            cargo zigbuild --release --target ${{ matrix.target }} -p ov_cli
-          else
-            cargo build --release --target ${{ matrix.target }} -p ov_cli
-          fi
+            ${{ runner.os }}-cargo-lib-${{ matrix.target }}-
 
       # ── Build ragfs-ffi staticlib (for Go cgo embedding) ──
       - name: Build ragfs-ffi staticlib
@@ -159,12 +342,12 @@ jobs:
             cargo build --release --target ${{ matrix.target }} -p ragfs-ffi
           fi
 
-      # ── Package artifacts (CLI and lib ship as separate archives) ──
-      - name: Package release archives
+      # ── Package LIB archive ──
+      - name: Package release archive
         id: package
         shell: bash
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.resolve.outputs.version }}"
           BASE="openviking-${VERSION}-${{ matrix.name }}"
           EXT="${{ matrix.archive_ext }}"
 
@@ -182,18 +365,8 @@ jobs:
             fi
           }
 
-          # --- CLI archive: openviking-<ver>-<plat>-cli.{tar.gz,zip} ---
-          STG_CLI="release-${{ matrix.name }}-cli"
-          mkdir -p "$STG_CLI"
-          cp "target/${{ matrix.target }}/release/${{ matrix.ov_binary }}" "$STG_CLI/"
-          [[ "$EXT" != "zip" ]] && chmod +x "$STG_CLI/${{ matrix.ov_binary }}"
-          for f in README.md LICENSE; do [[ -f "$f" ]] && cp "$f" "$STG_CLI/"; done
-          make_archive "$STG_CLI" "$BASE-cli.$EXT"
-
-          # --- LIB archive: openviking-<ver>-<plat>-lib.{tar.gz,zip} ---
-          # ragfs-ffi staticlib (Go/cgo embedding) + C header. rustc emits
-          # libragfs_ffi.a (ar) on unix and ragfs_ffi.lib (COFF) on msvc;
-          # the matrix ffi_lib value matches the on-disk name.
+          # rustc emits libragfs_ffi.a (ar) on unix and ragfs_ffi.lib (COFF)
+          # on msvc; the matrix ffi_lib value matches the on-disk name.
           STG_LIB="release-${{ matrix.name }}-lib"
           mkdir -p "$STG_LIB/lib" "$STG_LIB/include"
           cp "target/${{ matrix.target }}/release/${{ matrix.ffi_lib }}" "$STG_LIB/lib/"
@@ -201,23 +374,22 @@ jobs:
           for f in README.md LICENSE; do [[ -f "$f" ]] && cp "$f" "$STG_LIB/"; done
           make_archive "$STG_LIB" "$BASE-lib.$EXT"
 
-          echo "archive_cli=$BASE-cli.$EXT" >> "$GITHUB_OUTPUT"
           echo "archive_lib=$BASE-lib.$EXT" >> "$GITHUB_OUTPUT"
-          ls -lh "$BASE-cli.$EXT" "$BASE-lib.$EXT"
+          ls -lh "$BASE-lib.$EXT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.name }}
-          path: |
-            openviking-${{ steps.version.outputs.version }}-${{ matrix.name }}-cli.*
-            openviking-${{ steps.version.outputs.version }}-${{ matrix.name }}-lib.*
+          name: lib-${{ matrix.name }}
+          path: openviking-${{ needs.resolve.outputs.version }}-${{ matrix.name }}-lib.*
 
   # ─── Create GitHub Release ───────────────────────────────────────────────────
   release:
     name: Create Release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [resolve, build-cli, build-lib]
+    if: >-
+      startsWith(github.ref, 'refs/tags/') &&
+      (needs.build-cli.result == 'success' || needs.build-lib.result == 'success')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -241,26 +413,13 @@ jobs:
           done | sort -k2 > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Resolve version and tag
-        id: tag
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            TAG="${GITHUB_REF#refs/tags/}"
-          elif [[ "${GITHUB_REF}" == refs/tags/cli@* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/cli@}"
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: OpenViking ${{ steps.tag.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ needs.resolve.outputs.release_name }} ${{ needs.resolve.outputs.version }}
           draft: false
-          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
             artifacts/**/*
@@ -270,8 +429,10 @@ jobs:
   # ─── Ad-hoc build (no release, just artifacts) ──────────────────────────────
   adhoc:
     name: Ad-hoc Build
-    needs: build
-    if: github.event_name == 'workflow_dispatch'
+    needs: [resolve, build-cli, build-lib]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (needs.build-cli.result == 'success' || needs.build-lib.result == 'success')
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
