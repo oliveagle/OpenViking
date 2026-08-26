@@ -162,3 +162,4 @@ jobs:
       # prefix (daily-lib@.. / daily-cli@..); else all.
       component: ${{ inputs.component || (startsWith(github.ref_name, 'daily-lib') && 'lib') || (startsWith(github.ref_name, 'daily-cli') && 'cli') || 'all' }}
       sha: ${{ needs.sync.outputs.sha }}
+      release: true
