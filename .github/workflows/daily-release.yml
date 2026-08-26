@@ -134,6 +134,9 @@ jobs:
             else
               # GITHUB_TOKEN push: must not touch .github/workflows/**
               if git diff --name-only "$BASE" HEAD -- .github/workflows/ | grep -q .; then
+                # full reset of the path to pre-merge state (git checkout alone
+                # would keep files that upstream ADDED under .github/workflows)
+                git rm -r -q .github/workflows
                 git checkout "$BASE" -- .github/workflows
                 git commit --amend --no-edit
                 echo "NOTE: upstream changed .github/workflows/**; kept pre-merge workflow files so the push is allowed."
