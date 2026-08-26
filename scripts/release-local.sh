@@ -140,7 +140,11 @@ if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "lib" ]; then CARGO_PKGS+=(-p ra
 
 if [ "$SKIP_BUILD" -eq 0 ]; then
   echo "==> [1/5] macos-arm64 (native)"
-  build_pkg --release "${CARGO_PKGS[@]}"
+  # Explicit native target triple: the packaging steps copy from
+  # target/aarch64-apple-darwin/release/, so the build must land there
+  # too (a bare `cargo build` outputs to target/release/ and packaging
+  # would silently ship stale binaries — regressed in v0.1.1).
+  build_pkg --release --target aarch64-apple-darwin "${CARGO_PKGS[@]}"
 
   echo "==> [2/5] macos-amd64 (cross)"
   build_pkg --release --target x86_64-apple-darwin "${CARGO_PKGS[@]}"
