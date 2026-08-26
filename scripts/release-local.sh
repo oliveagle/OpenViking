@@ -70,6 +70,10 @@ cd "$REPO_ROOT"
 if [ -z "$VERSION" ]; then
   VERSION="$(git rev-parse --short=7 HEAD)"
 fi
+# Stamp the release version into the ov_cli binary: ov_cli/build.rs reads
+# OPENVIKING_VERSION and falls back to CARGO_PKG_VERSION (0.0.0) when it is
+# unset, which is what made released binaries report "OpenViking v0.0.0".
+export OPENVIKING_VERSION="$VERSION"
 OUT_DIR="dist/release"
 
 CARGO="${CARGO:-$HOME/.cargo/bin/cargo}"

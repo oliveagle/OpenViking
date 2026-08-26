@@ -238,6 +238,13 @@ jobs:
       # ── Build ov CLI binary ──
       - name: Build ov CLI
         shell: bash
+        env:
+          # Stamp the release version (short git hash of the release
+          # commit) into the binary. ov_cli/build.rs reads
+          # OPENVIKING_VERSION and falls back to CARGO_PKG_VERSION
+          # (0.0.0) when it is unset, which is what made released
+          # binaries report "OpenViking v0.0.0".
+          OPENVIKING_VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           if [[ "${{ runner.os }}" == "Linux" ]]; then
             cargo zigbuild --release --target ${{ matrix.target }} -p ov_cli
