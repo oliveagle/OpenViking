@@ -1,0 +1,120 @@
+# daily-release.yml — Daily upstream sync + build + release
+#
+# What it does (once a day, or on demand):
+#   1. sync   : fetch the upstream (fork parent) `main`, merge --no-ff into
+#               the sync branch, push the merge commit
+#   2. release: call release-binaries.yml (workflow_call) which builds the
+#               selected components and publishes a GitHub Release whose
+#               version is the SHORT GIT HASH of the new HEAD
+#               (tag d@<hash>, name "OpenViking <hash>")
+#
+# Configuration (repo Settings → Variables and secrets → Variables):
+#   DAILY_SYNC_BRANCH      branch to sync & release from
+#                          (default: feat/cross-platform-release-binaries)
+#   DAILY_UPSTREAM_BRANCH  upstream branch to merge (default: main)
+#   DAILY_UPSTREAM_URL     upstream git URL (default: auto-detected fork
+#                          parent, i.e. https://github.com/volcengine/OpenViking.git)
+#
+# NOTE (forks): GitHub does NOT run `schedule` triggers on forked repos.
+# While this repo is a fork, drive the daily run from a local cron:
+#
+#   0 2 * * * cd <repo> && scripts/daily-local.sh
+#
+# (or trigger manually with `gh workflow run daily-release.yml --ref <branch>`).
+# Once the repo is standalone or merged upstream, the schedule below takes
+# over automatically.
+#
+# If the upstream merge conflicts, the sync job fails and no release is
+# published that day — resolve the conflict on the sync branch and re-run.
+
+name: Daily Sync & Release
+
+on:
+  schedule:
+    - cron: '0 18 * * *'  # 02:00 Asia/Shanghai (UTC+8)
+  workflow_dispatch:
+    inputs:
+      component:
+        description: 'Which component to build: all (cli + lib), cli, or lib'
+        required: true
+        type: choice
+        options:
+          - all
+          - cli
+          - lib
+        default: all
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-release
+  cancel-in-progress: false
+
+env:
+  SYNC_BRANCH: ${{ vars.DAILY_SYNC_BRANCH || 'feat/cross-platform-release-binaries' }}
+  UPSTREAM_BRANCH: ${{ vars.DAILY_UPSTREAM_BRANCH || 'main' }}
+
+jobs:
+  # ─── Sync upstream ──────────────────────────────────────────────────────────
+  sync:
+    name: Sync upstream
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.info.outputs.sha }}
+    steps:
+      - name: Checkout sync branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SYNC_BRANCH }}
+          fetch-depth: 0
+
+      - name: Resolve upstream remote
+        id: up
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          URL="${{ vars.DAILY_UPSTREAM_URL || '' }}"
+          if [[ -z "$URL" ]]; then
+            PARENT="$(gh api "repos/${{ github.repository }}" --jq '.parent.full_name // empty')"
+            [[ -n "$PARENT" ]] && URL="https://github.com/$PARENT.git"
+          fi
+          if [[ -z "$URL" ]]; then
+            echo "No upstream (not a fork, DAILY_UPSTREAM_URL unset); skipping sync."
+            echo "url=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          git remote add upstream "$URL"
+          git fetch --no-tags upstream "${{ env.UPSTREAM_BRANCH }}"
+          echo "upstream/${{ env.UPSTREAM_BRANCH }}: $(git rev-parse --short "upstream/${{ env.UPSTREAM_BRANCH }}")"
+
+      - name: Merge upstream
+        id: merge
+        if: steps.up.outputs.url != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          UP="upstream/${{ env.UPSTREAM_BRANCH }}"
+          if git merge-base --is-ancestor "$UP" HEAD; then
+            echo "Already up to date with $UP"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git merge --no-ff "$UP" -m "chore(daily): sync $UP $(git rev-parse --short "$UP")"
+            git push origin "HEAD:refs/heads/${{ env.SYNC_BRANCH }}"
+            echo "Synced, new HEAD: $(git rev-parse --short HEAD)"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report SHA
+        id: info
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  # ─── Build & release (hash version, d@<hash> tag) ──────────────────────────
+  release:
+    name: Build & Release
+    needs: sync
+    uses: ./.github/workflows/release-binaries.yml
+    with:
+      component: ${{ inputs.component || 'all' }}
+      sha: ${{ needs.sync.outputs.sha }}
