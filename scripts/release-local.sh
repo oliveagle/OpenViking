@@ -26,7 +26,7 @@
 # Usage:
 #   scripts/release-local.sh [VERSION] [--component all|cli|lib] [--release] [--skip-build]
 #
-#   VERSION      archive version string (default: 0.1.0)
+#   VERSION      archive version string (default: short git hash of HEAD)
 #   --component  which component to build: all (default), cli, or lib
 #   --release    after building, create a GitHub release matching the
 #                component (mirrors the workflow tags):
@@ -45,7 +45,7 @@
 set -euo pipefail
 
 # ── Arguments ─────────────────────────────────────────────────────────────────
-VERSION="0.1.0"
+VERSION=""
 COMPONENT="all"
 DO_RELEASE=0
 SKIP_BUILD=0
@@ -66,6 +66,10 @@ esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+# Default version = short git hash of HEAD (no more semantic versioning).
+if [ -z "$VERSION" ]; then
+  VERSION="$(git rev-parse --short=7 HEAD)"
+fi
 OUT_DIR="dist/release"
 
 CARGO="${CARGO:-$HOME/.cargo/bin/cargo}"

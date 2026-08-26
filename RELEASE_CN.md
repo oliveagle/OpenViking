@@ -25,7 +25,7 @@ OpenViking 的发版目标不是单一产物，而是围绕不同使用入口发
 | `openviking` 主包 | `vX.Y.Z` | 主 release tag，例如 `v0.3.26`。 |
 | `openviking-sdk` | `python-sdk@X.Y.Z` | SDK 专用 tag，例如 `python-sdk@0.1.3`。 |
 | Rust CLI / npm CLI | `cli@X.Y.Z` | CLI 专用 tag，例如 `cli@0.2.0`。 |
-| 跨平台二进制 | `vX.Y.Z`（两者）/ `lib@X.Y.Z`（仅 lib）/ `cli@X.Y.Z`（仅 CLI） | `Release Binaries` workflow 按平台发布 `-cli` / `-lib` 归档；`lib@*` 为 Go/cgo 嵌入轨道。 |
+| 跨平台二进制 | `v<hash>`（两者）/ `lib@<hash>`（仅 lib）/ `cli@<hash>`（仅 CLI）/ `d@<hash>`（daily） | `Release Binaries` workflow 按平台发布 `-cli` / `-lib` 归档；版本为 release commit 的短 git hash（不再使用语义化版本）；`lib@*` 为 Go/cgo 嵌入轨道。 |
 | ClawHub 插件 latest | `YYYY.M.D` 或 `YYYY.M.D-N` | 由 workflow 自动生成或手动指定。 |
 | ClawHub 插件 dev | `YYYY.M.D-dev.N` | dev channel 使用。 |
 
@@ -125,15 +125,21 @@ workflow 会把 tag 中的版本写入平台包和 wrapper 包。如果 npm 上�
 
 ## 跨平台二进制发版流程
 
-二进制发版支持独立轨道（`.github/workflows/release-binaries.yml`）：
+二进制发版的版本号为 **release commit 的短 git hash**（不再使用语义化版本）；tag 仅作触发器（`.github/workflows/release-binaries.yml`）：
 
-- **完整发版**（`vX.Y.Z`）：同时构建并发布 `ov` CLI 与 `ragfs-ffi` 静态库。Release 名称：`OpenViking vX.Y.Z`。
-- **仅 lib**（`lib@X.Y.Z`）：仅发布 `ragfs-ffi` 静态库 + C header 归档。Release 名称：`OpenViking Lib X.Y.Z` —— Go/cgo 嵌入用户使用的轨道（见 `docs/embedding-go.md`）。
-- **仅 CLI**（`cli@X.Y.Z`）：与 npm 发版并行，仅发布 `ov` CLI 归档。Release 名称：`OpenViking CLI X.Y.Z`。
+- **完整发版**（tag `v<hash>`）：同时构建并发布 `ov` CLI 与 `ragfs-ffi` 静态库。Release 名称：`OpenViking <hash>`。
+- **仅 lib**（tag `lib@<hash>`）：仅发布 `ragfs-ffi` 静态库 + C header 归档。Release 名称：`OpenViking Lib <hash>` —— Go/cgo 嵌入用户使用的轨道（见 `docs/embedding-go.md`）。
+- **仅 CLI**（tag `cli@<hash>`）：与 npm 发版并行，仅发布 `ov` CLI 归档。Release 名称：`OpenViking CLI <hash>`。
 
-归档按平台（`linux/amd64`、`linux/arm64`、`macos/amd64`、`macos/arm64`、`windows/amd64`）发布为 `openviking-<version>-<platform>-{cli,lib}.{tar.gz,zip}`，并附带 `SHA256SUMS` 校验文件。
+归档按平台（`linux/amd64`、`linux/arm64`、`macos/amd64`、`macos/arm64`、`windows/amd64`）发布为 `openviking-<hash>-<platform>-{cli,lib}.{tar.gz,zip}`，并附带 `SHA256SUMS` 校验文件。
 
 workflow 同时支持手动 dispatch（`component` 输入：`all` / `cli` / `lib`），用于不打 tag 的临时构建。
+
+### Daily 同步发版
+
+`.github/workflows/daily-release.yml` 每天 02:00（Asia/Shanghai）运行：将 upstream `main` 合并进同步分支（默认 `feat/cross-platform-release-binaries`，可用仓库变量 `DAILY_SYNC_BRANCH` 配置），推送 merge commit，然后调用 `release-binaries.yml` 发布完整 release（tag `d@<hash>`，名称 `OpenViking <hash>`）。
+
+> 注意：GitHub 不会在 fork 仓库上运行 `schedule` 触发器。在本仓库还是 fork 期间，用本地 crontab 驱动 daily 运行 —— `0 2 * * * cd <repo> && scripts/daily-local.sh`（或手动：`gh workflow run daily-release.yml --ref <branch>`）。仓库 standalone（或合回 upstream）后，schedule 自动接管。
 
 ## OpenClaw / ClawHub 插件发布
 
