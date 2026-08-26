@@ -34,7 +34,11 @@ OpenViking naming, matching `devine_cli`'s `vikingfs_*` convention).
 
 ### A. From a release archive (recommended)
 
-Each platform ships two archives from `.github/workflows/release-binaries.yml`:
+`.github/workflows/release-binaries.yml` ships the CLI and the lib on two
+independent release tracks — tag `v<version>` releases both, tag
+`lib@<version>` releases **lib only** (the track Go embedders want), tag
+`cli@<version>` releases CLI only, and `workflow_dispatch` accepts a
+`component` input (`all` / `cli` / `lib`). Per platform the archives are:
 
 ```
 openviking-<version>-<platform>-cli.{tar.gz,zip}   # the ov CLI binary

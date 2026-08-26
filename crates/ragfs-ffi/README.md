@@ -10,8 +10,10 @@ directly — no Python wheel required.
 
 ## What is released
 
-Each platform ships two release archives
-(`openviking-<version>-<platform>-{cli,lib}.{tar.gz,zip}`):
+The CLI and the lib ship on independent release tracks
+(`.github/workflows/release-binaries.yml`): tag `v<version>` releases both,
+tag `lib@<version>` releases the **lib only** (the track Go embedders want).
+Per platform the archives are `openviking-<version>-<platform>-{cli,lib}.{tar.gz,zip}`:
 
 ```
 -cli:  ov                       # the OpenViking CLI binary (or ov.exe on Windows)

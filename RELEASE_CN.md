@@ -25,6 +25,7 @@ OpenViking 的发版目标不是单一产物，而是围绕不同使用入口发
 | `openviking` 主包 | `vX.Y.Z` | 主 release tag，例如 `v0.3.26`。 |
 | `openviking-sdk` | `python-sdk@X.Y.Z` | SDK 专用 tag，例如 `python-sdk@0.1.3`。 |
 | Rust CLI / npm CLI | `cli@X.Y.Z` | CLI 专用 tag，例如 `cli@0.2.0`。 |
+| 跨平台二进制 | `vX.Y.Z`（两者）/ `lib@X.Y.Z`（仅 lib）/ `cli@X.Y.Z`（仅 CLI） | `Release Binaries` workflow 按平台发布 `-cli` / `-lib` 归档；`lib@*` 为 Go/cgo 嵌入轨道。 |
 | ClawHub 插件 latest | `YYYY.M.D` 或 `YYYY.M.D-N` | 由 workflow 自动生成或手动指定。 |
 | ClawHub 插件 dev | `YYYY.M.D-dev.N` | dev channel 使用。 |
 
@@ -121,6 +122,18 @@ cli@X.Y.Z
 - wrapper 包：`@openviking/cli`
 
 workflow 会把 tag 中的版本写入平台包和 wrapper 包。如果 npm 上已存在同版本包，workflow 会跳过已发布版本。
+
+## 跨平台二进制发版流程
+
+二进制发版支持独立轨道（`.github/workflows/release-binaries.yml`）：
+
+- **完整发版**（`vX.Y.Z`）：同时构建并发布 `ov` CLI 与 `ragfs-ffi` 静态库。Release 名称：`OpenViking vX.Y.Z`。
+- **仅 lib**（`lib@X.Y.Z`）：仅发布 `ragfs-ffi` 静态库 + C header 归档。Release 名称：`OpenViking Lib X.Y.Z` —— Go/cgo 嵌入用户使用的轨道（见 `docs/embedding-go.md`）。
+- **仅 CLI**（`cli@X.Y.Z`）：与 npm 发版并行，仅发布 `ov` CLI 归档。Release 名称：`OpenViking CLI X.Y.Z`。
+
+归档按平台（`linux/amd64`、`linux/arm64`、`macos/amd64`、`macos/arm64`、`windows/amd64`）发布为 `openviking-<version>-<platform>-{cli,lib}.{tar.gz,zip}`，并附带 `SHA256SUMS` 校验文件。
+
+workflow 同时支持手动 dispatch（`component` 输入：`all` / `cli` / `lib`），用于不打 tag 的临时构建。
 
 ## OpenClaw / ClawHub 插件发布
 

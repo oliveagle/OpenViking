@@ -65,7 +65,8 @@ prefix**: `viking_fs_open`, `viking_fs_get`, `viking_fs_put`,
 Prebuilt staticlibs ship in the per-platform `-lib` release archives
 (`openviking-<version>-<platform>-lib.{tar.gz,zip}`) produced by
 `.github/workflows/release-binaries.yml` (the `-cli` archives contain only
-the ov binary):
+the ov binary). Tag `lib@<version>` publishes a **lib-only** release, so Go
+embedders never need to touch the CLI archives:
 
 ```
 lib/libragfs_ffi.a    # staticlib (ragfs_ffi.lib on Windows)
