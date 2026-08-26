@@ -24,11 +24,14 @@
 #   dist/release/SHA256SUMS
 #
 # Usage:
-#   scripts/release-local.sh [VERSION] [--release] [--skip-build]
+#   scripts/release-local.sh [VERSION] [--component all|cli|lib] [--release] [--skip-build]
 #
-#   VERSION     archive version string (default: 0.1.0)
-#   --release   after building, create/update GitHub release v<VERSION>
-#               (requires `gh` authenticated with write access)
+#   VERSION      archive version string (default: 0.1.0)
+#   --component  which component to build: all (default), cli, or lib
+#   --release    after building, create a GitHub release matching the
+#                component (mirrors the workflow tags):
+#                  all -> v<VERSION>,  cli -> cli@<VERSION>,  lib -> lib@<VERSION>
+#                (requires `gh` authenticated with write access)
 #   --skip-build reuse existing target/ builds, only re-package + verify
 #
 # Requirements:
@@ -43,16 +46,23 @@ set -euo pipefail
 
 # ── Arguments ─────────────────────────────────────────────────────────────────
 VERSION="0.1.0"
+COMPONENT="all"
 DO_RELEASE=0
 SKIP_BUILD=0
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --release)    DO_RELEASE=1 ;;
     --skip-build) SKIP_BUILD=1 ;;
-    -h|--help)    sed -n '2,40p' "$0"; exit 0 ;;
-    *)            VERSION="$arg" ;;
+    --component)  shift; COMPONENT="${1:?--component requires all|cli|lib}" ;;
+    -h|--help)    sed -n '2,50p' "$0"; exit 0 ;;
+    *)            VERSION="$1" ;;
   esac
+  shift
 done
+case "$COMPONENT" in
+  all|cli|lib) ;;
+  *) echo "FATAL: --component must be all|cli|lib"; exit 1 ;;
+esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -63,7 +73,8 @@ TC_DIR="${TC_DIR:-$HOME/.rustup/toolchains/stable-aarch64-apple-darwin}"
 RUSTC="$TC_DIR/bin/rustc"
 
 echo "==> OpenViking local release pipeline"
-echo "    version : $VERSION"
+echo "    version  : $VERSION"
+echo "    component: $COMPONENT"
 echo "    cargo   : $CARGO"
 echo "    rustc   : $RUSTC"
 
@@ -114,25 +125,30 @@ build_pkg() { # build <extra-cargo-args...> e.g. --release -p ov_cli -p ragfs-ff
 }
 
 # ── Build matrix ──────────────────────────────────────────────────────────────
+# Component -> cargo packages (mirrors the workflow's build-cli / build-lib jobs)
+CARGO_PKGS=()
+if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "cli" ]; then CARGO_PKGS+=(-p ov_cli); fi
+if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "lib" ]; then CARGO_PKGS+=(-p ragfs-ffi); fi
+
 if [ "$SKIP_BUILD" -eq 0 ]; then
   echo "==> [1/5] macos-arm64 (native)"
-  build_pkg --release -p ov_cli -p ragfs-ffi
+  build_pkg --release "${CARGO_PKGS[@]}"
 
   echo "==> [2/5] macos-amd64 (cross)"
-  build_pkg --release --target x86_64-apple-darwin -p ov_cli -p ragfs-ffi
+  build_pkg --release --target x86_64-apple-darwin "${CARGO_PKGS[@]}"
 
   echo "==> [3/5] linux-amd64 (musl, zigbuild)"
   command -v cargo-zigbuild >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/cargo-zigbuild" ] \
     || { echo "FATAL: cargo-zigbuild not found"; exit 1; }
-  "$CARGO" +stable zigbuild --release --target x86_64-unknown-linux-musl -p ov_cli -p ragfs-ffi
+  "$CARGO" +stable zigbuild --release --target x86_64-unknown-linux-musl "${CARGO_PKGS[@]}"
 
   echo "==> [4/5] linux-arm64 (musl, zigbuild)"
-  "$CARGO" +stable zigbuild --release --target aarch64-unknown-linux-musl -p ov_cli -p ragfs-ffi
+  "$CARGO" +stable zigbuild --release --target aarch64-unknown-linux-musl "${CARGO_PKGS[@]}"
 
   echo "==> [5/5] windows-amd64 (msvc, xwin)"
   command -v cargo-xwin >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/cargo-xwin" ] \
     || { echo "FATAL: cargo-xwin not found (cargo install cargo-xwin)"; exit 1; }
-  "$CARGO" +stable xwin build --release --target x86_64-pc-windows-msvc -p ov_cli -p ragfs-ffi
+  "$CARGO" +stable xwin build --release --target x86_64-pc-windows-msvc "${CARGO_PKGS[@]}"
 else
   echo "==> --skip-build: reusing existing target/ builds"
 fi
@@ -159,8 +175,8 @@ make_archive() {
   fi
 }
 
-package_split() { # <name> <target> <ov_binary> <ffi_lib_name> <ext>
-  local name="$1" target="$2" ovbin="$3" ffi="$4" ext="$5"
+package_cli() { # <name> <target> <ov_binary> <ext>
+  local name="$1" target="$2" ovbin="$3" ext="$4"
   local base="openviking-$VERSION-$name"
 
   # --- CLI archive ---
@@ -171,6 +187,12 @@ package_split() { # <name> <target> <ov_binary> <ffi_lib_name> <ext>
   for f in README.md LICENSE; do [ -f "$f" ] && cp "$f" "$stg_cli/"; done
   chmod -R u+rw "$stg_cli"
   make_archive "$stg_cli" "$base-cli.$ext"
+  echo "    packaged: $base-cli.$ext"
+}
+
+package_lib() { # <name> <target> <ffi_lib_name> <ext>
+  local name="$1" target="$2" ffi="$3" ext="$4"
+  local base="openviking-$VERSION-$name"
 
   # --- LIB archive (staticlib + header) ---
   # rustc emits libragfs_ffi.a (ar) on unix and ragfs_ffi.lib (COFF) on
@@ -182,16 +204,24 @@ package_split() { # <name> <target> <ov_binary> <ffi_lib_name> <ext>
   for f in README.md LICENSE; do [ -f "$f" ] && cp "$f" "$stg_lib/"; done
   chmod -R u+rw "$stg_lib"
   make_archive "$stg_lib" "$base-lib.$ext"
-
-  echo "    packaged: $base-cli.$ext + $base-lib.$ext"
+  echo "    packaged: $base-lib.$ext"
 }
 
 echo "==> Packaging"
-package_split macos-arm64   aarch64-apple-darwin      ov      libragfs_ffi.a tar.gz
-package_split macos-amd64   x86_64-apple-darwin       ov      libragfs_ffi.a tar.gz
-package_split linux-amd64   x86_64-unknown-linux-musl ov      libragfs_ffi.a tar.gz
-package_split linux-arm64   aarch64-unknown-linux-musl ov     libragfs_ffi.a tar.gz
-package_split windows-amd64 x86_64-pc-windows-msvc    ov.exe  ragfs_ffi.lib  zip
+if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "cli" ]; then
+  package_cli macos-arm64    aarch64-apple-darwin      ov     tar.gz
+  package_cli macos-amd64    x86_64-apple-darwin       ov     tar.gz
+  package_cli linux-amd64    x86_64-unknown-linux-musl ov     tar.gz
+  package_cli linux-arm64    aarch64-unknown-linux-musl ov    tar.gz
+  package_cli windows-amd64  x86_64-pc-windows-msvc    ov.exe zip
+fi
+if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "lib" ]; then
+  package_lib macos-arm64    aarch64-apple-darwin       libragfs_ffi.a tar.gz
+  package_lib macos-amd64    x86_64-apple-darwin        libragfs_ffi.a tar.gz
+  package_lib linux-amd64    x86_64-unknown-linux-musl  libragfs_ffi.a tar.gz
+  package_lib linux-arm64    aarch64-unknown-linux-musl libragfs_ffi.a tar.gz
+  package_lib windows-amd64  x86_64-pc-windows-msvc     ragfs_ffi.lib  zip
+fi
 
 # ── Checksums ─────────────────────────────────────────────────────────────────
 echo "==> SHA256SUMS"
@@ -235,18 +265,23 @@ verify_lib() { # <archive> <ext> <ffi>
   rm -rf "$tmp"
 }
 # CLI archives: binary present
-for pl in macos-arm64 macos-amd64 linux-amd64 linux-arm64; do
-  verify_cli "$OUT_DIR/openviking-$VERSION-$pl-cli.tar.gz" tar.gz ov
-done
-verify_cli "$OUT_DIR/openviking-$VERSION-windows-amd64-cli.zip" zip ov.exe
+if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "cli" ]; then
+  for pl in macos-arm64 macos-amd64 linux-amd64 linux-arm64; do
+    verify_cli "$OUT_DIR/openviking-$VERSION-$pl-cli.tar.gz" tar.gz ov
+  done
+  verify_cli "$OUT_DIR/openviking-$VERSION-windows-amd64-cli.zip" zip ov.exe
+fi
 # LIB archives: staticlib + symbols + header
-for pl in macos-arm64 macos-amd64 linux-amd64 linux-arm64; do
-  verify_lib "$OUT_DIR/openviking-$VERSION-$pl-lib.tar.gz" tar.gz libragfs_ffi.a
-done
-verify_lib "$OUT_DIR/openviking-$VERSION-windows-amd64-lib.zip" zip ragfs_ffi.lib
+if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "lib" ]; then
+  for pl in macos-arm64 macos-amd64 linux-amd64 linux-arm64; do
+    verify_lib "$OUT_DIR/openviking-$VERSION-$pl-lib.tar.gz" tar.gz libragfs_ffi.a
+  done
+  verify_lib "$OUT_DIR/openviking-$VERSION-windows-amd64-lib.zip" zip ragfs_ffi.lib
+fi
 
 # Host smoke test: run the native binary if the host matches macos-arm64
-if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+if { [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "cli" ]; } && \
+    [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
   if "$REPO_ROOT/target/aarch64-apple-darwin/release/ov" --version >/dev/null 2>&1; then
     echo "    OK: host smoke test (ov --version)"
   else
@@ -259,41 +294,66 @@ ls -lh "$OUT_DIR"
 
 # ── Optional GitHub release ───────────────────────────────────────────────────
 if [ "$DO_RELEASE" -eq 1 ]; then
-  echo "==> Creating GitHub release v$VERSION"
+  # Tag/title mirror the workflow: v* = full, cli@* = CLI only, lib@* = lib only
+  case "$COMPONENT" in
+    cli) RELEASE_TAG="cli@$VERSION"; RELEASE_TITLE="OpenViking CLI v$VERSION" ;;
+    lib) RELEASE_TAG="lib@$VERSION"; RELEASE_TITLE="OpenViking Lib v$VERSION" ;;
+    *)   RELEASE_TAG="v$VERSION";    RELEASE_TITLE="OpenViking v$VERSION" ;;
+  esac
+  echo "==> Creating GitHub release $RELEASE_TAG"
   command -v gh >/dev/null || { echo "FATAL: gh not found"; exit 1; }
   NOTES_FILE="$(mktemp)"
   {
-    echo "## OpenViking v$VERSION — cross-platform binaries"
+    echo "## $RELEASE_TITLE — cross-platform binaries"
     echo ""
-    echo "Per platform, two archives: \`-cli\` (ov binary) and \`-lib\` (ragfs-ffi staticlib + C header)."
+    case "$COMPONENT" in
+      cli) echo "One archive per platform: \`-cli\` (ov binary)." ;;
+      lib) echo "One archive per platform: \`-lib\` (ragfs-ffi staticlib + C header)." ;;
+      *)   echo "Two archives per platform: \`-cli\` (ov binary) and \`-lib\` (ragfs-ffi staticlib + C header)." ;;
+    esac
     echo ""
-    echo "| Platform | CLI archive | LIB archive |"
-    echo "|---|---|---|"
-    echo "| linux/amd64 | \`openviking-$VERSION-linux-amd64-cli.tar.gz\` | \`...-lib.tar.gz\` (\`lib/libragfs_ffi.a\`, static musl) |"
-    echo "| linux/arm64 | \`openviking-$VERSION-linux-arm64-cli.tar.gz\` | \`...-lib.tar.gz\` (\`lib/libragfs_ffi.a\`, static musl) |"
-    echo "| macos/amd64 | \`openviking-$VERSION-macos-amd64-cli.tar.gz\` | \`...-lib.tar.gz\` (\`lib/libragfs_ffi.a\`) |"
-    echo "| macos/arm64 | \`openviking-$VERSION-macos-arm64-cli.tar.gz\` | \`...-lib.tar.gz\` (\`lib/libragfs_ffi.a\`) |"
-    echo "| windows/amd64 | \`openviking-$VERSION-windows-amd64-cli.zip\` (\`ov.exe\`, MSVC) | \`...-lib.zip\` (\`lib/ragfs_ffi.lib\`, COFF) |"
+    if [ "$COMPONENT" = "all" ]; then
+      echo "| Platform | CLI archive | LIB archive |"
+      echo "|---|---|---|"
+      echo "| linux/amd64 | \`openviking-$VERSION-linux-amd64-cli.tar.gz\` | \`...-lib.tar.gz\` (\`lib/libragfs_ffi.a\`, static musl) |"
+      echo "| linux/arm64 | \`openviking-$VERSION-linux-arm64-cli.tar.gz\` | \`...-lib.tar.gz\` (\`lib/libragfs_ffi.a\`, static musl) |"
+      echo "| macos/amd64 | \`openviking-$VERSION-macos-amd64-cli.tar.gz\` | \`...-lib.tar.gz\` (\`lib/libragfs_ffi.a\`) |"
+      echo "| macos/arm64 | \`openviking-$VERSION-macos-arm64-cli.tar.gz\` | \`...-lib.tar.gz\` (\`lib/libragfs_ffi.a\`) |"
+      echo "| windows/amd64 | \`openviking-$VERSION-windows-amd64-cli.zip\` (\`ov.exe\`, MSVC) | \`...-lib.zip\` (\`lib/ragfs_ffi.lib\`, COFF) |"
+    elif [ "$COMPONENT" = "cli" ]; then
+      echo "| Platform | CLI archive |"
+      echo "|---|---|"
+      echo "| linux/amd64 | \`openviking-$VERSION-linux-amd64-cli.tar.gz\` |"
+      echo "| linux/arm64 | \`openviking-$VERSION-linux-arm64-cli.tar.gz\` |"
+      echo "| macos/amd64 | \`openviking-$VERSION-macos-amd64-cli.tar.gz\` |"
+      echo "| macos/arm64 | \`openviking-$VERSION-macos-arm64-cli.tar.gz\` |"
+      echo "| windows/amd64 | \`openviking-$VERSION-windows-amd64-cli.zip\` (\`ov.exe\`, MSVC) |"
+    else
+      echo "| Platform | LIB archive |"
+      echo "|---|---|"
+      echo "| linux/amd64 | \`openviking-$VERSION-linux-amd64-lib.tar.gz\` (\`lib/libragfs_ffi.a\`, static musl) |"
+      echo "| linux/arm64 | \`openviking-$VERSION-linux-arm64-lib.tar.gz\` (\`lib/libragfs_ffi.a\`, static musl) |"
+      echo "| macos/amd64 | \`openviking-$VERSION-macos-amd64-lib.tar.gz\` (\`lib/libragfs_ffi.a\`) |"
+      echo "| macos/arm64 | \`openviking-$VERSION-macos-arm64-lib.tar.gz\` (\`lib/libragfs_ffi.a\`) |"
+      echo "| windows/amd64 | \`openviking-$VERSION-windows-amd64-lib.zip\` (\`lib/ragfs_ffi.lib\`, COFF) |"
+    fi
     echo ""
-    echo "Embedding into Go? You only need the \`-lib\` archive — see \`docs/embedding-go.md\` and \`examples/ragfs_go\`."
-    echo ""
+    if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "lib" ]; then
+      echo "Embedding into Go? You only need the \`-lib\` archive — see \`docs/embedding-go.md\` and \`examples/ragfs_go\`."
+      echo ""
+    fi
     echo "Checksums: see \`SHA256SUMS\`."
   } > "$NOTES_FILE"
-  gh release create "v$VERSION" \
+  RELEASE_FILES=()
+  for f in "$OUT_DIR"/openviking-$VERSION-*-cli.* "$OUT_DIR"/openviking-$VERSION-*-lib.*; do
+    [ -f "$f" ] && RELEASE_FILES+=("$REPO_ROOT/$f")
+  done
+  RELEASE_FILES+=("$REPO_ROOT/$OUT_DIR/SHA256SUMS")
+  gh release create "$RELEASE_TAG" \
     --target "$(git rev-parse HEAD)" \
-    --title "OpenViking v$VERSION" \
+    --title "$RELEASE_TITLE" \
     --notes-file "$NOTES_FILE" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-linux-amd64-cli.tar.gz" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-linux-amd64-lib.tar.gz" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-linux-arm64-cli.tar.gz" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-linux-arm64-lib.tar.gz" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-macos-amd64-cli.tar.gz" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-macos-amd64-lib.tar.gz" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-macos-arm64-cli.tar.gz" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-macos-arm64-lib.tar.gz" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-windows-amd64-cli.zip" \
-    "$REPO_ROOT/$OUT_DIR/openviking-$VERSION-windows-amd64-lib.zip" \
-    "$REPO_ROOT/$OUT_DIR/SHA256SUMS"
+    "${RELEASE_FILES[@]}"
   rm -f "$NOTES_FILE"
-  echo "==> Release v$VERSION created"
+  echo "==> Release $RELEASE_TAG created"
 fi
