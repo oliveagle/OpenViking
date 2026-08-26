@@ -37,6 +37,15 @@
 #
 # If the upstream merge conflicts, the sync job fails and no release is
 # published that day — resolve the conflict on the sync branch and re-run.
+#
+# Pushing changes to .github/workflows/** from CI: GITHUB_TOKEN cannot do
+# this (the `workflows` permission is not grantable to push/schedule-
+# triggered workflows). Two ways to handle upstream workflow updates:
+#   - set repo secret DAILY_PUSH_TOKEN (classic PAT with repo scope): the
+#     sync job pushes EVERYTHING, including workflow files
+#   - otherwise: workflow files are kept at their pre-merge state so the
+#     push is allowed; upstream workflow updates are deferred (a NOTE is
+#     printed) — sync them manually when convenient.
 
 name: Daily Sync & Release
 
@@ -60,10 +69,6 @@ on:
 
 permissions:
   contents: write
-  # upstream merges can touch .github/workflows/**; the GITHUB_TOKEN needs
-  # the workflows permission to push such changes (github.com enforces this
-  # for App tokens).
-  workflows: write
 
 concurrency:
   group: daily-release
@@ -78,6 +83,8 @@ jobs:
   sync:
     name: Sync upstream
     runs-on: ubuntu-24.04
+    env:
+      DAILY_PUSH_TOKEN: ${{ secrets.DAILY_PUSH_TOKEN }}
     outputs:
       sha: ${{ steps.info.outputs.sha }}
     steps:
@@ -118,8 +125,22 @@ jobs:
             echo "Already up to date with $UP"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
+            BASE=$(git rev-parse HEAD)
             git merge --no-ff "$UP" -m "chore(daily): sync $UP $(git rev-parse --short "$UP")"
-            git push origin "HEAD:refs/heads/${{ env.SYNC_BRANCH }}"
+            if [[ -n "$DAILY_PUSH_TOKEN" ]]; then
+              # PAT push: allowed to include .github/workflows/** changes
+              ORIGIN_URL=$(git remote get-url origin | sed -E 's#^git@github.com:#https://#')
+              git push "https://x-access-token:${DAILY_PUSH_TOKEN}@${ORIGIN_URL#https://}" "HEAD:refs/heads/$SYNC_BRANCH"
+            else
+              # GITHUB_TOKEN push: must not touch .github/workflows/**
+              if git diff --name-only "$BASE" HEAD -- .github/workflows/ | grep -q .; then
+                git checkout "$BASE" -- .github/workflows
+                git commit --amend --no-edit
+                echo "NOTE: upstream changed .github/workflows/**; kept pre-merge workflow files so the push is allowed."
+                echo "      Set the DAILY_PUSH_TOKEN repo secret (classic PAT, repo scope) to auto-sync workflow files too."
+              fi
+              git push origin "HEAD:refs/heads/$SYNC_BRANCH"
+            fi
             echo "Synced, new HEAD: $(git rev-parse --short HEAD)"
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
