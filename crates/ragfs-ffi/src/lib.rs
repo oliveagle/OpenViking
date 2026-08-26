@@ -208,9 +208,12 @@ pub unsafe extern "C" fn viking_fs_put(
                 acc.push_str(part);
                 prefixes.push(acc.clone());
             }
-            if prefixes.len() > 1 {
-                prefixes.pop();
-            }
+            // The last prefix is the file path itself — only its
+            // ancestors are directories. Always drop it; otherwise a
+            // top-level file (no "/" in the path) would be mkdir'd as a
+            // directory and the write below would fail with "is a
+            // directory" (regression: release v0.1.0 shipped this bug).
+            prefixes.pop();
             for p in &prefixes {
                 let _ = fs.mkdir(p, 0o755).await;
             }
@@ -353,4 +356,95 @@ pub unsafe extern "C" fn viking_free(ptr: *mut c_void) {
         return;
     }
     libc::free(ptr);
+}
+
+// ---------------------------------------------------------------------------
+// Tests (exercise the C ABI directly — the same entry points cgo uses)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!("ragfs_ffi_test_{}_{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir.to_string_lossy().into_owned()
+    }
+
+    fn last_err() -> String {
+        let p = viking_last_error();
+        if p.is_null() {
+            return String::from("(null)");
+        }
+        unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    }
+
+    fn open(root: &str) -> *mut c_void {
+        let c = CString::new(root.to_string()).unwrap();
+        let h = unsafe { viking_fs_open(c.as_ptr()) };
+        assert!(!h.is_null(), "open failed: {}", last_err());
+        h
+    }
+
+    #[test]
+    fn test_put_top_level_file() {
+        // Regression: release v0.1.0 mkdir'd the file's own name as a
+        // directory for paths without '/', so the write failed with
+        // "is a directory".
+        let root = temp_root("top");
+        let h = open(&root);
+        let path = CString::new("top.txt").unwrap();
+        let data = b"hello";
+        let rc = unsafe { viking_fs_put(h, path.as_ptr(), data.as_ptr() as *const c_void, data.len()) };
+        assert_eq!(rc, 0, "put top-level file failed: {}", unsafe {
+            std::ffi::CStr::from_ptr(viking_last_error()).to_string_lossy()
+        });
+
+        let mut len: u64 = 0;
+        let buf = unsafe { viking_fs_get(h, path.as_ptr(), &mut len) };
+        assert!(!buf.is_null());
+        assert_eq!(len, 5);
+        assert_eq!(unsafe { std::slice::from_raw_parts(buf as *const u8, len as usize) }, b"hello");
+        unsafe { viking_free(buf) };
+        unsafe { viking_fs_close(h) };
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_put_nested_file_autocreates_parents() {
+        let root = temp_root("nested");
+        let h = open(&root);
+        let path = CString::new("a/b/nested.txt").unwrap();
+        let data = b"world";
+        let rc = unsafe { viking_fs_put(h, path.as_ptr(), data.as_ptr() as *const c_void, data.len()) };
+        assert_eq!(rc, 0, "put nested file failed");
+
+        // list the middle dir — the parent must exist
+        let list = unsafe { viking_fs_list(h, CString::new("a/b").unwrap().as_ptr()) };
+        assert!(!list.is_null());
+        let json = unsafe { std::ffi::CStr::from_ptr(list) }.to_string_lossy().into_owned();
+        assert!(json.contains("nested.txt"), "list: {}", json);
+        unsafe { viking_free(list as *mut c_void) };
+        unsafe { viking_fs_close(h) };
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_put_empty_data_creates_empty_file() {
+        let root = temp_root("empty");
+        let h = open(&root);
+        let path = CString::new("empty.txt").unwrap();
+        let rc = unsafe { viking_fs_put(h, path.as_ptr(), std::ptr::null(), 0) };
+        assert_eq!(rc, 0, "put empty failed");
+        let mut len: u64 = 0;
+        let buf = unsafe { viking_fs_get(h, path.as_ptr(), &mut len) };
+        assert!(buf.is_null() || len == 0);
+        if !buf.is_null() {
+            unsafe { viking_free(buf) };
+        }
+        unsafe { viking_fs_close(h) };
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
