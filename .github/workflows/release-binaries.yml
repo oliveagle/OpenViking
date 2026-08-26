@@ -428,6 +428,20 @@ jobs:
       contents: write
 
     steps:
+      # If the ref is one of the real release tags (v*/cli@*/lib@*) use it;
+      # otherwise (daily-release.yml workflow_call from a branch or daily*
+      # tag) create and push a d@<hash> tag on the release commit first.
+      # (must come BEFORE the artifact download: checkout's default
+      # git clean -ffdx would wipe the downloaded artifacts/)
+      - name: Checkout release commit
+        if: >-
+          !startsWith(github.ref_name, 'v') &&
+          !startsWith(github.ref_name, 'cli@') &&
+          !startsWith(github.ref_name, 'lib@')
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -445,19 +459,6 @@ jobs:
             echo "$h  $(basename "$f")"
           done | sort -k2 > SHA256SUMS
           cat SHA256SUMS
-
-      # If the ref is one of the real release tags (v*/cli@*/lib@*) use it;
-      # otherwise (daily-release.yml workflow_call from a branch or daily*
-      # tag) create and push a d@<hash> tag on the release commit first.
-      - name: Checkout release commit
-        id: needstag
-        if: >-
-          !startsWith(github.ref_name, 'v') &&
-          !startsWith(github.ref_name, 'cli@') &&
-          !startsWith(github.ref_name, 'lib@')
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.sha || github.sha }}
 
       - name: Resolve release tag
         id: reltag
