@@ -8,6 +8,17 @@
 #               version is the SHORT GIT HASH of the new HEAD
 #               (tag d@<hash>, name "OpenViking <hash>")
 #
+# Trigger modes:
+#   - schedule (02:00 Asia/Shanghai)          — only on non-fork repos
+#   - workflow_dispatch (component input)     — UI / `gh workflow run`
+#   - push of a daily* tag                    — works on forks, no index lag:
+#       daily@<ts>      full release (cli + lib)
+#       daily-lib@<ts>  lib only
+#       daily-cli@<ts>  cli only
+#     (push events load the workflow file from the pushed ref itself, so
+#      this is the reliable way to run it while the repo is a fork —
+#      see scripts/daily-local.sh)
+#
 # Configuration (repo Settings → Variables and secrets → Variables):
 #   DAILY_SYNC_BRANCH      branch to sync & release from
 #                          (default: feat/cross-platform-release-binaries)
@@ -43,6 +54,9 @@ on:
           - cli
           - lib
         default: all
+  push:
+    tags:
+      - 'daily*'
 
 permissions:
   contents: write
@@ -116,5 +130,7 @@ jobs:
     needs: sync
     uses: ./.github/workflows/release-binaries.yml
     with:
-      component: ${{ inputs.component || 'all' }}
+      # component: dispatch input wins; else derived from the daily* tag
+      # prefix (daily-lib@.. / daily-cli@..); else all.
+      component: ${{ inputs.component || (startsWith(github.ref_name, 'daily-lib') && 'lib') || (startsWith(github.ref_name, 'daily-cli') && 'cli') || 'all' }}
       sha: ${{ needs.sync.outputs.sha }}
