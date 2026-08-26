@@ -60,6 +60,10 @@ on:
 
 permissions:
   contents: write
+  # upstream merges can touch .github/workflows/**; the GITHUB_TOKEN needs
+  # the workflows permission to push such changes (github.com enforces this
+  # for App tokens).
+  workflows: write
 
 concurrency:
   group: daily-release

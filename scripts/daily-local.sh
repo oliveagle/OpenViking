@@ -57,7 +57,7 @@ cd "$REPO_ROOT"
 
 # Resolve owner/repo from the origin remote so git targets the fork, not
 # the upstream parent.
-REPO="$(git remote get-url origin | sed -E 's#^git@github.com:##; s#^https?://github.com/##; s#\\.git$##')"
+REPO="$(git remote get-url origin | sed -E 's#^git@github.com:##; s#^https?://github.com/##; s#\.git$##')"
 [[ -n "$REPO" ]] || { echo "FATAL: cannot resolve repo from origin remote"; exit 1; }
 
 # Fetch the branch tip and tag it — the tag push triggers the workflow.
